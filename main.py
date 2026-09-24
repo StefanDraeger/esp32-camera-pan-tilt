@@ -131,8 +131,8 @@ def current_state(message=""):
         "message": message,
         "presets": presets,
         "controls": {
-            "left": pan_servo.angle > config.PAN_MIN,
-            "right": pan_servo.angle < config.PAN_MAX,
+            "right": pan_servo.angle > config.PAN_MIN,
+            "left": pan_servo.angle < config.PAN_MAX,
             "up": tilt_servo.angle > config.TILT_MIN,
             "down": tilt_servo.angle < config.TILT_MAX,
         },
@@ -239,10 +239,10 @@ def delete_saved_position(preset_id):
 
 def move_camera(direction):
     if direction == "left":
-        pan_servo.move(-config.MOVE_STEP)
+        pan_servo.move(config.MOVE_STEP)
         message = "Nach links bewegt"
     elif direction == "right":
-        pan_servo.move(config.MOVE_STEP)
+        pan_servo.move(-config.MOVE_STEP)
         message = "Nach rechts bewegt"
     elif direction == "up":
         tilt_servo.move(-config.MOVE_STEP)
