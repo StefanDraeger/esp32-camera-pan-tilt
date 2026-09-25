@@ -35,3 +35,17 @@ SERVO_MAX_US = 2500
 # dauerhaft summen. Ohne PWM halten sie ihre Position nicht aktiv gegen Last.
 SERVO_RELEASE_AFTER_MOVE = True
 SERVO_SETTLE_MS = 300
+
+# Sweep-Modus: Pan-Servo automatisch zwischen PAN_MIN und PAN_MAX hin- und
+# herbewegen, bis die Schaltflaeche erneut betaetigt wird. Der Takt kann
+# ueber die Webseite innerhalb von SWEEP_INTERVAL_MIN_MS und
+# SWEEP_INTERVAL_MAX_MS angepasst werden.
+SWEEP_STEP_DEGREES = 5
+SWEEP_INTERVAL_MS = 1000
+SWEEP_INTERVAL_MIN_MS = 100
+SWEEP_INTERVAL_MAX_MS = 10000
+
+# Wartezeit beim Warten auf eingehende HTTP-Verbindungen. Legt fest, wie
+# praezise der Sweep-Takt eingehalten wird, waehrend der Server weiterhin
+# auf Anfragen reagiert.
+SWEEP_POLL_SECONDS = 0.2

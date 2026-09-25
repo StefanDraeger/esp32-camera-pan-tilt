@@ -23,6 +23,8 @@ können zusammen mit einem Referenzbild dauerhaft als Presets gespeichert werden
 - Persistente Speicherung der Presets und Bilder im Flash des ESP32
 - Direktes Anfahren und Löschen gespeicherter Positionen
 - Optionale Abschaltung des PWM-Signals gegen Servo-Summen im Stillstand
+- Sweep-Modus: automatisches Hin- und Herschwenken der Pan-Achse per Knopfdruck
+- Sweep-Takt direkt auf der Webseite in 100-ms-Schritten einstellbar
 - Keine zusätzliche App und kein externer Server erforderlich
 
 ## Benötigte Hardware
@@ -157,6 +159,23 @@ Starkes dauerhaftes Brummen kann außerdem auf einen mechanischen Anschlag,
 eine schwergängige Halterung, ungeeignete Pulsbreiten oder eine instabile
 Stromversorgung hinweisen.
 
+### Sweep-Modus konfigurieren
+
+```python
+SWEEP_STEP_DEGREES = 5
+SWEEP_INTERVAL_MS = 1000
+SWEEP_INTERVAL_MIN_MS = 100
+SWEEP_INTERVAL_MAX_MS = 10000
+```
+
+`SWEEP_STEP_DEGREES` legt die Schrittweite je Bewegung fest, `SWEEP_INTERVAL_MS`
+den Takt beim Start des Servers. Über das Feld `Sweep-Takt` auf der Webseite
+lässt sich der Takt zur Laufzeit in 100-ms-Schritten zwischen
+`SWEEP_INTERVAL_MIN_MS` und `SWEEP_INTERVAL_MAX_MS` anpassen, ohne den
+Mikrocontroller neu zu starten. Bei sehr kurzen Takten nahe 100 ms kann der
+SG90 dem Zielwinkel mechanisch nicht mehr folgen; in diesem Fall den Takt
+wieder erhöhen.
+
 ## Installation
 
 1. Eine passende MicroPython-Firmware auf den XIAO ESP32-C6 flashen.
@@ -202,6 +221,28 @@ Referenzbild. Über `ANFAHREN` werden die gespeicherten Winkel angesteuert. Beim
 Anfahren bleiben die Vorschaubilder geladen; nur Positionsanzeige und Tastenstatus
 werden aktualisiert. `LÖSCHEN` entfernt sowohl den JSON-Eintrag als auch das Bild.
 
+### Sweep-Modus
+
+Die Schaltfläche `SWEEP STARTEN` bewegt die Pan-Achse fortlaufend alle
+`SWEEP_INTERVAL_MS` (Standard 1000 ms) um `SWEEP_STEP_DEGREES` (Standard 5°)
+zwischen `PAN_MIN` und `PAN_MAX` hin und her. Beim Erreichen einer Grenze
+kehrt die Bewegungsrichtung automatisch um. Ein erneuter Klick auf die
+inzwischen als `SWEEP STOPPEN` beschriftete Schaltfläche hält die Bewegung an.
+
+Während der Sweep läuft, sind `ZENTRIEREN`, die Pfeiltasten für Pan sowie das
+Anfahren gespeicherter Positionen gesperrt, um widersprüchliche Bewegungen zu
+vermeiden. Die Tilt-Achse bleibt unabhängig davon weiterhin bedienbar.
+
+Das Feld `Sweep-Takt` daneben ändert den Bewegungstakt in 100-ms-Schritten
+(einstellbarer Bereich siehe [Sweep-Modus konfigurieren](#sweep-modus-konfigurieren))
+und wirkt sofort, auch während der Sweep bereits läuft.
+
+Solange der Sweep läuft, lädt der Browser das Kamerabild automatisch im
+gleichen Takt wie die Servobewegung nach, statt im normalen, über
+`Bild aktualisieren alle` eingestellten Intervall. So bleibt das angezeigte
+Bild synchron zur tatsächlichen Kameraposition. Nach dem Stoppen des Sweeps
+greift wieder das eingestellte Aktualisierungsintervall.
+
 ## Persistente Speicherung
 
 Alle Presets bleiben nach einem Neustart erhalten. Eine mögliche
@@ -240,6 +281,8 @@ Schreibvorgangs manuell bearbeitet werden.
 | `/move?direction=up` | Kamera nach oben bewegen |
 | `/move?direction=down` | Kamera nach unten bewegen |
 | `/move?direction=center` | Kamera zentrieren |
+| `/sweep/toggle` | Sweep-Modus starten oder stoppen |
+| `/sweep/interval?ms=500` | Sweep-Takt setzen (100–10000 ms) |
 | `/preset/save?name=Eingang` | Position und Snapshot speichern |
 | `/preset/go?id=1` | Gespeicherte Position anfahren |
 | `/preset/delete?id=1` | Position und Referenzbild löschen |

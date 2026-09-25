@@ -4,7 +4,7 @@ except ImportError:
     import json
 
 
-def render(snapshot_url, refresh_seconds):
+def render(snapshot_url, refresh_seconds, sweep_interval_ms):
     """Erzeugt die komplette Bedienoberflaeche."""
     safe_url = json.dumps(snapshot_url)
     return """<!doctype html>
@@ -39,6 +39,9 @@ def render(snapshot_url, refresh_seconds):
     button:active { transform: scale(.96); background: #13a89e; }
     button:disabled { background: #1b242e; color: #667483; cursor: not-allowed;
                       opacity: .55; transform: none; }
+    .sweep-toggle { display: block; width: 100%%; margin: 0 0 18px; }
+    .sweep-toggle.active { background: #13a89e; }
+    .sweep-toggle.active:hover { background: #17c1b6; }
     .up { grid-column: 2; }
     .left { grid-column: 1; grid-row: 2; }
     .center { grid-column: 2; grid-row: 2; font-size: .78rem; }
@@ -93,6 +96,13 @@ def render(snapshot_url, refresh_seconds):
         <button class="down" data-direction="down" aria-label="Nach unten">▼</button>
       </div>
 
+      <button id="sweepToggle" class="sweep-toggle" type="button">SWEEP STARTEN</button>
+      <div class="settings">
+        <label for="sweepInterval">Sweep-Takt</label>
+        <input id="sweepInterval" type="number" min="100" max="10000" step="100" value="%d">
+        <span>ms</span>
+      </div>
+
       <div class="preset-save">
         <input id="presetName" type="text" maxlength="40" placeholder="Name, z. B. Eingang">
         <button id="savePreset" type="button">POSITION + BILD SPEICHERN</button>
@@ -119,11 +129,16 @@ def render(snapshot_url, refresh_seconds):
     const presetName = document.getElementById('presetName');
     const savePreset = document.getElementById('savePreset');
     const presetList = document.getElementById('presetList');
+    const sweepButton = document.getElementById('sweepToggle');
+    const sweepIntervalInput = document.getElementById('sweepInterval');
     let refreshTimer;
     let holdTimer;
     let holdDirection;
     let currentState;
     let renderedPresetsSignature = '';
+    let statePollTimer;
+    let sweepPolling = false;
+    let activeRefreshMs = null;
 
     function updateControls(state) {
       if (!state.controls) return;
@@ -148,6 +163,68 @@ def render(snapshot_url, refresh_seconds):
       if (signature !== renderedPresetsSignature) {
         renderPresets(presets);
         renderedPresetsSignature = signature;
+      }
+
+      sweepButton.textContent = state.sweep ? 'SWEEP STOPPEN' : 'SWEEP STARTEN';
+      sweepButton.classList.toggle('active', !!state.sweep);
+      if (!!state.sweep !== sweepPolling) {
+        sweepPolling = !!state.sweep;
+        clearInterval(statePollTimer);
+        if (sweepPolling) {
+          statePollTimer = setInterval(() => {
+            fetch('/state', { cache: 'no-store' }).then(response => response.json())
+              .then(showState).catch(() => {});
+          }, 1000);
+        }
+      }
+      applyRefreshInterval(state);
+    }
+
+    // Waehrend des Sweeps folgt das Bild dem Servo-Takt, sonst dem
+    // eingestellten Aktualisierungsintervall - sonst haengt das Bild hinterher.
+    function computeRefreshMs(state) {
+      if (state && state.sweep) {
+        return Math.max(100, Number(state.sweepIntervalMs) || 1000);
+      }
+      let seconds = Number(intervalInput.value);
+      seconds = Math.max(1, Math.min(60, Number.isFinite(seconds) ? seconds : 2));
+      return seconds * 1000;
+    }
+
+    function applyRefreshInterval(state) {
+      const ms = computeRefreshMs(state);
+      if (ms === activeRefreshMs) return;
+      activeRefreshMs = ms;
+      clearInterval(refreshTimer);
+      refreshTimer = setInterval(refreshImage, ms);
+    }
+
+    async function setSweepInterval() {
+      let ms = Number(sweepIntervalInput.value);
+      if (!Number.isFinite(ms)) ms = 1000;
+      ms = Math.max(100, Math.min(10000, Math.round(ms / 100) * 100));
+      sweepIntervalInput.value = ms;
+      try {
+        const response = await fetch('/sweep/interval?ms=' + ms, { cache: 'no-store' });
+        const state = await response.json();
+        if (response.ok) showState(state);
+      } catch (error) {
+        // Naechster Poll gleicht den Wert wieder ab.
+      }
+    }
+
+    async function toggleSweep() {
+      sweepButton.disabled = true;
+      try {
+        const response = await fetch('/sweep/toggle', { cache: 'no-store' });
+        const state = await response.json();
+        if (!response.ok) throw new Error(state.message || 'HTTP ' + response.status);
+        showState(state);
+        message.textContent = state.message || '';
+      } catch (error) {
+        message.textContent = error.message || 'Sweep-Aktion fehlgeschlagen';
+      } finally {
+        sweepButton.disabled = false;
       }
     }
 
@@ -243,9 +320,9 @@ def render(snapshot_url, refresh_seconds):
       let seconds = Number(intervalInput.value);
       seconds = Math.max(1, Math.min(60, Number.isFinite(seconds) ? seconds : 2));
       intervalInput.value = seconds;
-      clearInterval(refreshTimer);
-      refreshTimer = setInterval(refreshImage, seconds * 1000);
       localStorage.setItem('panTiltRefreshSeconds', seconds);
+      activeRefreshMs = null;
+      applyRefreshInterval(currentState);
     }
 
     async function move(direction) {
@@ -283,13 +360,16 @@ def render(snapshot_url, refresh_seconds):
 
     intervalInput.addEventListener('change', setRefreshTimer);
     savePreset.addEventListener('click', () => presetAction('save'));
+    sweepButton.addEventListener('click', toggleSweep);
+    sweepIntervalInput.addEventListener('change', setSweepInterval);
     const savedInterval = Number(localStorage.getItem('panTiltRefreshSeconds'));
     if (savedInterval >= 1 && savedInterval <= 60) intervalInput.value = savedInterval;
     setRefreshTimer();
     refreshImage();
     fetch('/state').then(response => response.json()).then(state => {
       showState(state);
+      if (state.sweepIntervalMs) sweepIntervalInput.value = state.sweepIntervalMs;
     }).catch(() => {});
   </script>
 </body>
-</html>""" % (refresh_seconds, safe_url)
+</html>""" % (sweep_interval_ms, refresh_seconds, safe_url)

@@ -88,6 +88,55 @@ def release_servos_after_movement():
         tilt_servo.release()
 
 
+sweep_active = False
+sweep_direction = 1
+sweep_next_step_ms = 0
+sweep_interval_ms = config.SWEEP_INTERVAL_MS
+
+
+def toggle_sweep():
+    global sweep_active, sweep_direction, sweep_next_step_ms
+    sweep_active = not sweep_active
+    if sweep_active:
+        sweep_direction = 1 if pan_servo.angle < config.PAN_MAX else -1
+        sweep_next_step_ms = time.ticks_add(time.ticks_ms(), sweep_interval_ms)
+        message = "Sweep gestartet"
+    else:
+        release_servos_after_movement()
+        message = "Sweep gestoppt"
+    return current_state(message), 200
+
+
+def set_sweep_interval(value):
+    global sweep_interval_ms
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return current_state("Ungueltiger Sweep-Takt"), 400
+
+    sweep_interval_ms = max(
+        config.SWEEP_INTERVAL_MIN_MS, min(config.SWEEP_INTERVAL_MAX_MS, value)
+    )
+    return current_state("Sweep-Takt auf %d ms gesetzt" % sweep_interval_ms), 200
+
+
+def step_sweep():
+    global sweep_direction, sweep_next_step_ms
+    if not sweep_active:
+        return
+
+    now = time.ticks_ms()
+    if time.ticks_diff(sweep_next_step_ms, now) > 0:
+        return
+
+    sweep_next_step_ms = time.ticks_add(now, sweep_interval_ms)
+    angle = pan_servo.move(sweep_direction * config.SWEEP_STEP_DEGREES)
+    if angle >= config.PAN_MAX:
+        sweep_direction = -1
+    elif angle <= config.PAN_MIN:
+        sweep_direction = 1
+
+
 def connect_wifi():
     if config.WIFI_SSID == "DEIN-WLAN-NAME":
         raise RuntimeError("Bitte zuerst die WLAN-Daten in config.py eintragen.")
@@ -130,9 +179,12 @@ def current_state(message=""):
         "tilt": tilt_servo.angle,
         "message": message,
         "presets": presets,
+        "sweep": sweep_active,
+        "sweepIntervalMs": sweep_interval_ms,
         "controls": {
-            "right": pan_servo.angle > config.PAN_MIN,
-            "left": pan_servo.angle < config.PAN_MAX,
+            "right": not sweep_active and pan_servo.angle > config.PAN_MIN,
+            "left": not sweep_active and pan_servo.angle < config.PAN_MAX,
+            "center": not sweep_active,
             "up": tilt_servo.angle > config.TILT_MIN,
             "down": tilt_servo.angle < config.TILT_MAX,
         },
@@ -213,6 +265,9 @@ def find_preset(preset_id):
 
 
 def move_to_saved_position(preset_id):
+    if sweep_active:
+        return current_state("Sweep aktiv, zuerst stoppen"), 409
+
     preset = find_preset(preset_id)
     if preset is None:
         return current_state("Gespeicherte Position nicht gefunden"), 404
@@ -238,6 +293,9 @@ def delete_saved_position(preset_id):
 
 
 def move_camera(direction):
+    if sweep_active and direction in ("left", "right", "center"):
+        return current_state("Sweep aktiv, zuerst stoppen"), 409
+
     if direction == "left":
         pan_servo.move(config.MOVE_STEP)
         message = "Nach links bewegt"
@@ -344,23 +402,44 @@ def url_decode(value):
     return result.decode("utf-8", "replace")
 
 
+HTTP_STATUS_TEXT = {
+    200: "200 OK",
+    400: "400 Bad Request",
+    404: "404 Not Found",
+    409: "409 Conflict",
+    500: "500 Internal Server Error",
+}
+
+
+def status_text(status_code):
+    return HTTP_STATUS_TEXT.get(status_code, "500 Internal Server Error")
+
+
 def run_server():
     address = socket.getaddrinfo("0.0.0.0", 80)[0][-1]
     server = socket.socket()
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(address)
     server.listen(3)
+    server.settimeout(config.SWEEP_POLL_SECONDS)
     print("Webserver gestartet")
 
     page = render(
         config.CAMERA_SNAPSHOT_URL,
         config.DEFAULT_REFRESH_SECONDS,
+        sweep_interval_ms,
     )
 
     while True:
+        step_sweep()
+
         client = None
         try:
             client, remote = server.accept()
+        except OSError:
+            continue
+
+        try:
             client.settimeout(3)
             request = client.recv(2048).decode("utf-8", "ignore")
             path, query = parse_request(request)
@@ -369,22 +448,24 @@ def run_server():
                 send_response(client, page)
             elif path == "/move":
                 state, status_code = move_camera(query.get("direction", ""))
-                status = "200 OK" if status_code == 200 else "400 Bad Request"
-                send_response(client, json.dumps(state), status, "application/json")
+                send_response(client, json.dumps(state), status_text(status_code), "application/json")
+            elif path == "/sweep/toggle":
+                state, status_code = toggle_sweep()
+                send_response(client, json.dumps(state), status_text(status_code), "application/json")
+            elif path == "/sweep/interval":
+                state, status_code = set_sweep_interval(query.get("ms"))
+                send_response(client, json.dumps(state), status_text(status_code), "application/json")
             elif path == "/state":
                 send_response(client, json.dumps(current_state()), "200 OK", "application/json")
             elif path == "/preset/save":
                 state, status_code = save_current_position(query.get("name", ""))
-                status = "200 OK" if status_code == 200 else "500 Internal Server Error"
-                send_response(client, json.dumps(state), status, "application/json")
+                send_response(client, json.dumps(state), status_text(status_code), "application/json")
             elif path == "/preset/go":
                 state, status_code = move_to_saved_position(query.get("id"))
-                status = "200 OK" if status_code == 200 else "404 Not Found"
-                send_response(client, json.dumps(state), status, "application/json")
+                send_response(client, json.dumps(state), status_text(status_code), "application/json")
             elif path == "/preset/delete":
                 state, status_code = delete_saved_position(query.get("id"))
-                status = "200 OK" if status_code == 200 else "404 Not Found"
-                send_response(client, json.dumps(state), status, "application/json")
+                send_response(client, json.dumps(state), status_text(status_code), "application/json")
             elif path.startswith("/images/"):
                 image_name = path[len("/images/"):]
                 allowed = any(item["image"] == image_name for item in saved_presets)
